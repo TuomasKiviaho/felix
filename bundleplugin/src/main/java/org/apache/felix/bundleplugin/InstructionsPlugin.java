@@ -51,7 +51,7 @@ public class InstructionsPlugin extends BundlePlugin
 
         try
         {
-            addMavenInstructions( project, getOSGiBuilder( project, instructions, properties, classpath ) );
+            addMavenInstructions( project, buildDependencyGraph( project ), getOSGiBuilder( project, instructions, properties, classpath ) );
         }
         catch ( FileNotFoundException e )
         {

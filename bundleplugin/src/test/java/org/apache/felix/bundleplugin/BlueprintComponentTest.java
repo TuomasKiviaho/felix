@@ -28,16 +28,24 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.jar.Manifest;
 
-import junit.framework.TestCase;
-
+import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.DefaultArtifact;
+import org.apache.maven.artifact.handler.ArtifactHandler;
+import org.apache.maven.artifact.handler.DefaultArtifactHandler;
+import org.apache.maven.artifact.versioning.VersionRange;
 import org.apache.maven.model.Resource;
+import org.apache.maven.plugin.testing.AbstractMojoTestCase;
 import org.apache.maven.plugin.testing.stubs.MavenProjectStub;
+import org.apache.maven.project.DefaultProjectBuilderConfiguration;
+import org.apache.maven.project.ProjectBuilderConfiguration;
+import org.apache.maven.shared.dependency.graph.DependencyGraphBuilder;
+import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.osgi.framework.Constants;
 
 import aQute.bnd.osgi.Builder;
 
 
-public class BlueprintComponentTest extends TestCase
+public class BlueprintComponentTest extends AbstractMojoTestCase
 {
 
     public void testBlueprint() throws Exception
@@ -70,6 +78,15 @@ public class BlueprintComponentTest extends TestCase
         project.setGroupId( "group" );
         project.setArtifactId( "artifact" );
         project.setVersion( "1.1.0.0" );
+        VersionRange versionRange = VersionRange.createFromVersion(project.getVersion());
+        ArtifactHandler artifactHandler = new DefaultArtifactHandler( "jar" );
+        Artifact artifact = new DefaultArtifact(project.getGroupId(),project.getArtifactId(),versionRange, null, "jar", null, artifactHandler);
+        project.setArtifact( artifact );
+        
+        ProjectBuilderConfiguration projectBuilderConfiguration = new DefaultProjectBuilderConfiguration();
+        projectBuilderConfiguration.setLocalRepository( null );
+        project.setProjectBuilderConfiguration( projectBuilderConfiguration );
+        
         Resource r = new Resource();
         r.setDirectory( new File( "src/test/resources" ).getAbsoluteFile().getCanonicalPath() );
         r.setIncludes( Arrays.asList( "**/*.*" ) );
@@ -79,6 +96,7 @@ public class BlueprintComponentTest extends TestCase
         ManifestPlugin plugin = new ManifestPlugin();
         plugin.setBuildDirectory( "target/tmp/basedir/target" );
         plugin.setOutputDirectory( new File( "target/tmp/basedir/target/classes" ) );
+        setVariableValueToObject( plugin, "m_dependencyGraphBuilder", lookup( DependencyGraphBuilder.class.getName(), "default" ) );
 
         Map instructions = new HashMap();
         instructions.put( "Test", "Foo" );
@@ -90,7 +108,8 @@ public class BlueprintComponentTest extends TestCase
         instructions.put( "Import-Service", "org.osgi.service.cm.ConfigurationAdmin;availability:=optional" );
 
         Properties props = new Properties();
-        Builder builder = plugin.buildOSGiBundle( project, instructions, props, plugin.getClasspath( project ) );
+        DependencyNode dependencyGraph = plugin.buildDependencyGraph(project);
+        Builder builder = plugin.buildOSGiBundle( project, dependencyGraph, instructions, props, plugin.getClasspath( project, dependencyGraph ) );
 
         Manifest manifest = builder.getJar().getManifest();
         String expSvc = manifest.getMainAttributes().getValue( Constants.EXPORT_SERVICE );

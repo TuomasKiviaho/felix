@@ -22,14 +22,26 @@ package org.apache.felix.bundleplugin;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.resolver.filter.AndArtifactFilter;
+import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
 import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.shared.dependency.graph.DependencyNode;
+import org.apache.maven.shared.dependency.graph.filter.ArtifactDependencyNodeFilter;
+import org.apache.maven.shared.dependency.graph.filter.DependencyNodeFilter;
+import org.apache.maven.shared.dependency.graph.internal.DefaultDependencyNode;
+import org.apache.maven.shared.dependency.graph.traversal.BuildingDependencyNodeVisitor;
+import org.apache.maven.shared.dependency.graph.traversal.CollectingDependencyNodeVisitor;
+import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
+import org.apache.maven.shared.dependency.graph.traversal.FilteringDependencyNodeVisitor;
 
-import aQute.bnd.osgi.Instruction;
 import aQute.bnd.header.OSGiHeader;
+import aQute.bnd.osgi.Instruction;
 
 
 /**
@@ -42,17 +54,23 @@ public abstract class AbstractDependencyFilter
     private static final Pattern MISSING_KEY_PATTERN = Pattern.compile( "(^|,)\\p{Blank}*(!)?\\p{Blank}*([a-zA-Z]+=)" );
 
     /**
+     * Dependency Graph.
+     */
+    private final DependencyNode m_dependencyGraph;
+    
+    /**
      * Dependency artifacts.
      */
     private final Collection m_dependencyArtifacts;
 
 
-    public AbstractDependencyFilter( Collection dependencyArtifacts )
+    public AbstractDependencyFilter( DependencyNode dependencyGraph, Collection dependencyArtifacts )
     {
+        m_dependencyGraph = dependencyGraph;
         m_dependencyArtifacts = dependencyArtifacts;
     }
 
-    private static abstract class DependencyFilter
+    private static abstract class DependencyFilter implements ArtifactFilter
     {
         private final Instruction m_instruction;
         private final String m_defaultValue;
@@ -70,22 +88,10 @@ public abstract class AbstractDependencyFilter
             m_defaultValue = defaultValue;
         }
 
+        
+        public abstract boolean include(Artifact dependency);
 
-        public void filter( Collection dependencies )
-        {
-            for ( Iterator i = dependencies.iterator(); i.hasNext(); )
-            {
-                if ( false == matches( ( Artifact ) i.next() ) )
-                {
-                    i.remove();
-                }
-            }
-        }
-
-
-        abstract boolean matches( Artifact dependency );
-
-
+        
         boolean matches( String text )
         {
             boolean result;
@@ -104,13 +110,41 @@ public abstract class AbstractDependencyFilter
     }
 
 
+    /**
+     * @see DefaultDependencyNode#accept(org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor)
+     */
+    private static class TrimmingDependencyNodeFilter implements DependencyNodeFilter
+    {
+        private DependencyNodeFilter dependencyNodeFilter;
+
+        
+        public TrimmingDependencyNodeFilter( DependencyNodeFilter dependencyNodeFilter )
+        {
+            this.dependencyNodeFilter = dependencyNodeFilter;
+        }
+
+
+        public boolean accept( DependencyNode node )
+        {
+            boolean accepted = dependencyNodeFilter.accept( node );
+            if (!accepted)
+            {
+                List<DependencyNode> children = node.getChildren();
+                children.clear();
+            }
+            return accepted;
+        }
+
+
+    }
+
+
     protected final void processInstructions( String header ) throws MojoExecutionException
     {
         Map instructions = OSGiHeader.parseHeader( MISSING_KEY_PATTERN.matcher( header ).replaceAll( "$1$2*;$3" ) );
 
         Collection availableDependencies = new LinkedHashSet( m_dependencyArtifacts );
 
-        DependencyFilter filter;
         for ( Iterator clauseIterator = instructions.entrySet().iterator(); clauseIterator.hasNext(); )
         {
             String inline = "false";
@@ -127,28 +161,30 @@ public abstract class AbstractDependencyFilter
                 primaryKey = primaryKey.substring( 1 );
             }
 
+            final AndArtifactFilter andArtifactFilter = new AndArtifactFilter();
             if ( !"*".equals( primaryKey ) )
             {
-                filter = new DependencyFilter( primaryKey )
+                ArtifactFilter filter = new DependencyFilter( primaryKey )
                 {
-                    boolean matches( Artifact dependency )
+                    public boolean include( Artifact dependency )
                     {
                         return super.matches( dependency.getArtifactId() );
                     }
                 };
                 // FILTER ON MAIN CLAUSE
-                filter.filter( filteredDependencies );
+                andArtifactFilter.add( filter );
             }
 
             for ( Iterator attrIterator = ( ( Map ) clause.getValue() ).entrySet().iterator(); attrIterator.hasNext(); )
             {
+                final ArtifactFilter filter;
                 // ATTRIBUTE: KEY --> REGEXP
                 Map.Entry attr = ( Map.Entry ) attrIterator.next();
                 if ( "groupId".equals( attr.getKey() ) )
                 {
                     filter = new DependencyFilter( ( String ) attr.getValue() )
                     {
-                        boolean matches( Artifact dependency )
+                        public boolean include( Artifact dependency )
                         {
                             return super.matches( dependency.getGroupId() );
                         }
@@ -158,7 +194,7 @@ public abstract class AbstractDependencyFilter
                 {
                     filter = new DependencyFilter( ( String ) attr.getValue() )
                     {
-                        boolean matches( Artifact dependency )
+                        public boolean include( Artifact dependency )
                         {
                             return super.matches( dependency.getArtifactId() );
                         }
@@ -168,7 +204,7 @@ public abstract class AbstractDependencyFilter
                 {
                     filter = new DependencyFilter( ( String ) attr.getValue() )
                     {
-                        boolean matches( Artifact dependency )
+                        public boolean include( Artifact dependency )
                         {
                             try
                             {
@@ -186,7 +222,7 @@ public abstract class AbstractDependencyFilter
                 {
                     filter = new DependencyFilter( ( String ) attr.getValue(), "compile" )
                     {
-                        boolean matches( Artifact dependency )
+                        public boolean include( Artifact dependency )
                         {
                             return super.matches( dependency.getScope() );
                         }
@@ -196,7 +232,7 @@ public abstract class AbstractDependencyFilter
                 {
                     filter = new DependencyFilter( ( String ) attr.getValue(), "jar" )
                     {
-                        boolean matches( Artifact dependency )
+                        public boolean include( Artifact dependency )
                         {
                             return super.matches( dependency.getType() );
                         }
@@ -206,7 +242,7 @@ public abstract class AbstractDependencyFilter
                 {
                     filter = new DependencyFilter( ( String ) attr.getValue() )
                     {
-                        boolean matches( Artifact dependency )
+                        public boolean include( Artifact dependency )
                         {
                             return super.matches( dependency.getClassifier() );
                         }
@@ -216,7 +252,7 @@ public abstract class AbstractDependencyFilter
                 {
                     filter = new DependencyFilter( ( String ) attr.getValue(), "false" )
                     {
-                        boolean matches( Artifact dependency )
+                        public boolean include( Artifact dependency )
                         {
                             return super.matches( "" + dependency.isOptional() );
                         }
@@ -233,8 +269,10 @@ public abstract class AbstractDependencyFilter
                 }
 
                 // FILTER ON EACH ATTRIBUTE
-                filter.filter( filteredDependencies );
+                andArtifactFilter.add( filter );
             }
+
+            filterDependencies( andArtifactFilter, filteredDependencies);
 
             if ( isNegative )
             {
@@ -256,4 +294,46 @@ public abstract class AbstractDependencyFilter
 
 
     protected abstract void processDependencies( Collection dependencies, String inline );
+
+
+    private void filterDependencies( final ArtifactFilter artifactFilter, Collection filteredDependencies )
+    {
+        CollectingDependencyNodeVisitor collectingDependencyNodeVisitor = new CollectingDependencyNodeVisitor();
+        final Artifact rootArtifact = m_dependencyGraph.getArtifact();
+        ArtifactFilter filter = new ArtifactFilter()
+        {
+
+
+            public boolean include( Artifact artifact )
+            {
+                return artifact.equals( rootArtifact ) || artifactFilter.include( artifact );
+            }
+
+
+        };
+        DependencyNodeFilter dependencyNodeFilter = new ArtifactDependencyNodeFilter( filter );
+        dependencyNodeFilter = new TrimmingDependencyNodeFilter( dependencyNodeFilter );
+        DependencyNodeVisitor dependencyNodeVisitor = 
+                        new FilteringDependencyNodeVisitor(collectingDependencyNodeVisitor, dependencyNodeFilter);
+        dependencyNodeVisitor = new BuildingDependencyNodeVisitor( dependencyNodeVisitor );
+        m_dependencyGraph.accept( dependencyNodeVisitor );
+        List dependencyNodes = collectingDependencyNodeVisitor.getNodes();
+        Set<String> ids = new LinkedHashSet<String>( dependencyNodes.size() );
+        for ( Iterator iterator = dependencyNodes.iterator(); iterator.hasNext(); )
+        {
+            DependencyNode dependencyNode = (DependencyNode) iterator.next();
+            Artifact artifact = dependencyNode.getArtifact();
+            String id = artifact.getId();
+            ids.add(id);
+        }
+        for (Iterator iterator = filteredDependencies.iterator(); iterator.hasNext();)
+        {
+            Artifact artifact = (Artifact) iterator.next();
+            String id = artifact.getId();
+            if (!ids.contains(id))
+            {
+                iterator.remove();
+            }
+        }
+    }
 }

@@ -57,7 +57,7 @@ public class AntPlugin extends BundlePlugin
         try
         {
             // assemble bundle as usual, but don't save it - this way we have all the instructions we need
-            Builder builder = buildOSGiBundle( currentProject, originalInstructions, properties, classpath );
+            Builder builder = buildOSGiBundle( currentProject, buildDependencyGraph( currentProject ), originalInstructions, properties, classpath );
             Properties bndProperties = builder.getProperties();
 
             // cleanup and remove all non-strings from the builder properties

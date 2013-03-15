@@ -34,6 +34,7 @@ import java.util.jar.Manifest;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.shared.dependency.graph.DependencyNode;
 
 import aQute.bnd.osgi.Analyzer;
 import aQute.bnd.osgi.Builder;
@@ -60,13 +61,13 @@ public class ManifestPlugin extends BundlePlugin
 
 
     @Override
-    protected void execute( MavenProject project, Map instructions, Properties properties, Jar[] classpath )
+    protected void execute( MavenProject project, DependencyNode dependencyGraph, Map instructions, Properties properties, Jar[] classpath )
         throws MojoExecutionException
     {
         Manifest manifest;
         try
         {
-            manifest = getManifest( project, instructions, properties, classpath );
+            manifest = getManifest( project, dependencyGraph, instructions, properties, classpath );
         }
         catch ( FileNotFoundException e )
         {
@@ -101,17 +102,17 @@ public class ManifestPlugin extends BundlePlugin
     }
 
 
-    public Manifest getManifest( MavenProject project, Jar[] classpath ) throws IOException, MojoFailureException,
+    public Manifest getManifest( MavenProject project, DependencyNode dependencyGraph, Jar[] classpath ) throws IOException, MojoFailureException,
         MojoExecutionException, Exception
     {
-        return getManifest( project, new LinkedHashMap(), new Properties(), classpath );
+        return getManifest( project, dependencyGraph, new LinkedHashMap(), new Properties(), classpath );
     }
 
 
-    public Manifest getManifest( MavenProject project, Map instructions, Properties properties, Jar[] classpath )
+    public Manifest getManifest( MavenProject project, DependencyNode dependencyGraph, Map instructions, Properties properties, Jar[] classpath )
         throws IOException, MojoFailureException, MojoExecutionException, Exception
     {
-        Analyzer analyzer = getAnalyzer( project, instructions, properties, classpath );
+        Analyzer analyzer = getAnalyzer( project, dependencyGraph, instructions, properties, classpath );
         boolean hasErrors = reportErrors( "Manifest " + project.getArtifact(), analyzer );
         if ( hasErrors )
         {
@@ -149,19 +150,19 @@ public class ManifestPlugin extends BundlePlugin
     }
 
 
-    protected Analyzer getAnalyzer( MavenProject project, Jar[] classpath ) throws IOException, MojoExecutionException,
+    protected Analyzer getAnalyzer( MavenProject project, DependencyNode dependencyGraph, Jar[] classpath ) throws IOException, MojoExecutionException,
         Exception
     {
-        return getAnalyzer( project, new LinkedHashMap(), new Properties(), classpath );
+        return getAnalyzer( project, dependencyGraph, new LinkedHashMap(), new Properties(), classpath );
     }
 
 
-    protected Analyzer getAnalyzer( MavenProject project, Map instructions, Properties properties, Jar[] classpath )
+    protected Analyzer getAnalyzer( MavenProject project, DependencyNode dependencyGraph, Map instructions, Properties properties, Jar[] classpath )
         throws IOException, MojoExecutionException, Exception
     {
         if ( rebuildBundle && supportedProjectTypes.contains( project.getArtifact().getType() ) )
         {
-            return buildOSGiBundle( project, instructions, properties, classpath );
+            return buildOSGiBundle( project, dependencyGraph, instructions, properties, classpath );
         }
 
         File file = project.getArtifact().getFile();
@@ -200,7 +201,7 @@ public class ManifestPlugin extends BundlePlugin
             analyzer.setProperty( Analyzer.EXPORT_PACKAGE, export );
         }
 
-        addMavenInstructions( project, analyzer );
+        addMavenInstructions( project, dependencyGraph, analyzer );
 
         // if we spot Embed-Dependency and the bundle is "target/classes", assume we need to rebuild
         if ( analyzer.getProperty( DependencyEmbedder.EMBED_DEPENDENCY ) != null && isOutputDirectory )
@@ -213,7 +214,7 @@ public class ManifestPlugin extends BundlePlugin
             analyzer.getJar().setManifest( analyzer.calcManifest() );
         }
 
-        mergeMavenManifest( project, analyzer );
+        mergeMavenManifest( project, dependencyGraph, analyzer );
 
         return analyzer;
     }

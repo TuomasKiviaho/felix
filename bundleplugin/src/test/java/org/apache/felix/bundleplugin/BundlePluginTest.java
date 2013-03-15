@@ -34,6 +34,8 @@ import java.util.jar.Manifest;
 import org.apache.maven.model.Organization;
 import org.apache.maven.plugin.testing.stubs.MavenProjectStub;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.shared.dependency.graph.DependencyGraphBuilder;
+import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.apache.maven.shared.osgi.DefaultMaven2OsgiConverter;
 import org.osgi.framework.Constants;
 
@@ -60,6 +62,7 @@ public class BundlePluginTest extends AbstractBundlePluginTest
         plugin.setMaven2OsgiConverter( new DefaultMaven2OsgiConverter() );
         plugin.setBuildDirectory( "." );
         plugin.setOutputDirectory( new File( getBasedir(), "target" + File.separatorChar + "scratch" ) );
+        setVariableValueToObject( plugin, "m_dependencyGraphBuilder", lookup( DependencyGraphBuilder.class.getName(), "default" ) );
     }
 
 
@@ -215,7 +218,6 @@ public class BundlePluginTest extends AbstractBundlePluginTest
             + "src/test/java/org/apache/felix/bundleplugin/packageinfo", resourcePaths );
     }
 
-
     public void testEmbedDependencyPositiveClauses() throws Exception
     {
         ArtifactStubFactory artifactFactory = new ArtifactStubFactory( plugin.getOutputDirectory(), true );
@@ -234,7 +236,8 @@ public class BundlePluginTest extends AbstractBundlePluginTest
             + "*;classifier=;type=jar;scope=runtime" );
         Properties props = new Properties();
 
-        Builder builder = plugin.buildOSGiBundle( project, instructions, props, plugin.getClasspath( project ) );
+        DependencyNode dependencyGraph = plugin.buildDependencyGraph(project);
+        Builder builder = plugin.buildOSGiBundle( project, dependencyGraph, instructions, props, plugin.getClasspath( project, dependencyGraph ) );
         Manifest manifest = builder.getJar().getManifest();
 
         String bcp = manifest.getMainAttributes().getValue( Constants.BUNDLE_CLASSPATH );
@@ -263,7 +266,8 @@ public class BundlePluginTest extends AbstractBundlePluginTest
         instructions.put( DependencyEmbedder.EMBED_DEPENDENCY, "!type=jar, !artifactId=c" );
         Properties props = new Properties();
 
-        Builder builder = plugin.buildOSGiBundle( project, instructions, props, plugin.getClasspath( project ) );
+        DependencyNode dependencyGraph = plugin.buildDependencyGraph(project);
+        Builder builder = plugin.buildOSGiBundle( project, dependencyGraph, instructions, props, plugin.getClasspath( project, dependencyGraph ) );
         Manifest manifest = builder.getJar().getManifest();
 
         String bcp = manifest.getMainAttributes().getValue( Constants.BUNDLE_CLASSPATH );
@@ -292,7 +296,8 @@ public class BundlePluginTest extends AbstractBundlePluginTest
         instructions.put( DependencyEmbedder.EMBED_DEPENDENCY, "c;type=jar,c;type=sources" );
         Properties props = new Properties();
 
-        Builder builder = plugin.buildOSGiBundle( project, instructions, props, plugin.getClasspath( project ) );
+        DependencyNode dependencyGraph = plugin.buildDependencyGraph(project);
+        Builder builder = plugin.buildOSGiBundle( project, dependencyGraph, instructions, props, plugin.getClasspath( project, dependencyGraph ) );
         Manifest manifest = builder.getJar().getManifest();
 
         String bcp = manifest.getMainAttributes().getValue( Constants.BUNDLE_CLASSPATH );
@@ -321,7 +326,8 @@ public class BundlePluginTest extends AbstractBundlePluginTest
         instructions.put( DependencyEmbedder.EMBED_DEPENDENCY, "artifactId=a|b" );
         Properties props = new Properties();
 
-        Builder builder = plugin.buildOSGiBundle( project, instructions, props, plugin.getClasspath( project ) );
+        DependencyNode dependencyGraph = plugin.buildDependencyGraph(project);
+        Builder builder = plugin.buildOSGiBundle( project, dependencyGraph, instructions, props, plugin.getClasspath( project, dependencyGraph ) );
         Manifest manifest = builder.getJar().getManifest();
 
         String bcp = manifest.getMainAttributes().getValue( Constants.BUNDLE_CLASSPATH );
@@ -347,15 +353,18 @@ public class BundlePluginTest extends AbstractBundlePluginTest
         MavenProject project = getMavenProjectStub();
         project.setDependencyArtifacts( artifacts );
         Properties props = new Properties();
+        
+        DependencyNode dependencyGraph = plugin.buildDependencyGraph(project);
+        Jar[] classpath = plugin.getClasspath( project, dependencyGraph );
 
         Map instructions1 = new HashMap();
         instructions1.put( DependencyEmbedder.EMBED_DEPENDENCY, "!scope=compile" );
-        Builder builder1 = plugin.buildOSGiBundle( project, instructions1, props, plugin.getClasspath( project ) );
+        Builder builder1 = plugin.buildOSGiBundle( project, dependencyGraph, instructions1, props, classpath );
         Manifest manifest1 = builder1.getJar().getManifest();
 
         Map instructions2 = new HashMap();
         instructions2.put( DependencyEmbedder.EMBED_DEPENDENCY, "scope=!compile" );
-        Builder builder2 = plugin.buildOSGiBundle( project, instructions2, props, plugin.getClasspath( project ) );
+        Builder builder2 = plugin.buildOSGiBundle( project, dependencyGraph, instructions2, props, classpath );
         Manifest manifest2 = builder2.getJar().getManifest();
 
         String bcp1 = manifest1.getMainAttributes().getValue( Constants.BUNDLE_CLASSPATH );
@@ -388,7 +397,8 @@ public class BundlePluginTest extends AbstractBundlePluginTest
         props.put( "4", new HashMap( 2 ) );
         props.put( "1, two, 3.0", new char[5] );
 
-        Builder builder = plugin.getOSGiBuilder( project, new HashMap(), props, plugin.getClasspath( project ) );
+        DependencyNode dependencyGraph = plugin.buildDependencyGraph(project);
+        Builder builder = plugin.getOSGiBuilder( project, new HashMap(), props, plugin.getClasspath( project, dependencyGraph ) );
 
         File file = new File( getBasedir(), "target" + File.separatorChar + "test.props" );
         builder.getProperties().store( new FileOutputStream( file ), "TEST" );

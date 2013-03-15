@@ -24,9 +24,14 @@ import java.io.File;
 import java.util.Collections;
 import java.util.Map;
 
+import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.DefaultArtifact;
+import org.apache.maven.artifact.handler.ArtifactHandler;
+import org.apache.maven.artifact.handler.DefaultArtifactHandler;
+import org.apache.maven.artifact.versioning.VersionRange;
 import org.apache.maven.plugin.testing.stubs.ArtifactStub;
-import org.apache.maven.plugin.testing.stubs.MavenProjectStub;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.shared.dependency.graph.DependencyGraphBuilder;
 import org.apache.maven.shared.osgi.DefaultMaven2OsgiConverter;
 
 
@@ -48,7 +53,7 @@ public class BundleAllPluginTest extends AbstractBundlePluginTest
     }
 
 
-    private void init()
+    private void init() throws Exception
     {
         plugin = new BundleAllPlugin();
         File baseDirectory = new File( getBasedir() );
@@ -57,6 +62,7 @@ public class BundleAllPluginTest extends AbstractBundlePluginTest
         File outputDirectory = new File( buildDirectory, "test-classes" );
         plugin.setOutputDirectory( outputDirectory );
         plugin.setMaven2OsgiConverter( new DefaultMaven2OsgiConverter() );
+        setVariableValueToObject( plugin, "m_dependencyGraphBuilder", lookup( DependencyGraphBuilder.class.getName(), "default" ) );
     }
 
 
@@ -87,12 +93,11 @@ public class BundleAllPluginTest extends AbstractBundlePluginTest
             testFile.delete();
         }
 
-        ArtifactStub artifact = new ArtifactStub();
-        artifact.setGroupId( "group" );
-        artifact.setArtifactId( "artifact" );
-        artifact.setVersion( "1.0.0.0" );
+        VersionRange versionRange = VersionRange.createFromVersion("1.0.0.0");
+        ArtifactHandler artifactHandler = new DefaultArtifactHandler( "jar" );
+        Artifact artifact = new DefaultArtifact("group","artifact",versionRange, null, "jar", null, artifactHandler);
 
-        MavenProject project = new MavenProjectStub();
+        MavenProject project = getMavenProjectStub();
         project.setGroupId( artifact.getGroupId() );
         project.setArtifactId( artifact.getArtifactId() );
         project.setVersion( artifact.getVersion() );
