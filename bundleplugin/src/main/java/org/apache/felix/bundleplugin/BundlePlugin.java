@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
@@ -76,14 +77,21 @@ import org.codehaus.plexus.util.DirectoryScanner;
 import org.codehaus.plexus.util.FileUtils;
 import org.codehaus.plexus.util.StringUtils;
 
+import aQute.bnd.header.Attrs;
+import aQute.bnd.header.OSGiHeader;
+import aQute.bnd.header.Parameters;
 import aQute.bnd.osgi.Analyzer;
 import aQute.bnd.osgi.Builder;
 import aQute.bnd.osgi.Constants;
 import aQute.bnd.osgi.EmbeddedResource;
 import aQute.bnd.osgi.FileResource;
+import aQute.bnd.osgi.Instruction;
+import aQute.bnd.osgi.Instructions;
 import aQute.bnd.osgi.Jar;
 import aQute.bnd.osgi.Processor;
+import aQute.lib.collections.ExtList;
 import aQute.lib.spring.SpringXMLType;
+import aQute.libg.generics.Create;
 
 
 /**
@@ -419,8 +427,7 @@ public class BundlePlugin extends AbstractMojo
 
                 try
                 {
-                    Manifest manifest = builder.getJar().getManifest();
-                    ManifestPlugin.writeManifest( manifest, outputFile );
+                    ManifestPlugin.writeManifest( builder, outputFile );
                 }
                 catch ( IOException e )
                 {
@@ -776,9 +783,18 @@ public class BundlePlugin extends AbstractMojo
             /*
              * Overlay generated bundle manifest with customized entries
              */
+            Properties properties = builder.getProperties();
             Manifest bundleManifest = jar.getManifest();
-            bundleManifest.getMainAttributes().putAll( mainMavenAttributes );
-            bundleManifest.getEntries().putAll( mavenManifest.getEntries() );
+            if ( properties.containsKey( "Merge-Headers" ) )
+            {
+                Instructions instructions = new Instructions( ExtList.from( builder.getProperty( "Merge-Headers" ) ) );
+                mergeManifest( instructions, bundleManifest, mavenManifest );
+            }
+            else
+            {
+                bundleManifest.getMainAttributes().putAll( mainMavenAttributes );
+                bundleManifest.getEntries().putAll( mavenManifest.getEntries() );
+            }
 
             // adjust the import package attributes so that optional dependencies use
             // optional resolution.
@@ -819,6 +835,187 @@ public class BundlePlugin extends AbstractMojo
         }
 
         builder.setJar( jar );
+    }
+
+
+    protected static void mergeManifest( Instructions instructions, Manifest... manifests ) throws IOException
+    {
+        for ( int i = manifests.length - 2; i >= 0; i-- )
+        {
+            Manifest mergedManifest = manifests[i];
+            Manifest manifest = manifests[i + 1];
+            Attributes mergedMainAttributes = mergedManifest.getMainAttributes();
+            Attributes mainAttributes = manifest.getMainAttributes();
+            Attributes filteredMainAttributes = filterAttributes( instructions, mainAttributes, null );
+            if ( !filteredMainAttributes.isEmpty() )
+            {
+                mergeAttributes( mergedMainAttributes, filteredMainAttributes );
+            }
+            Map<String, Attributes> mergedEntries = mergedManifest.getEntries();
+            Map<String, Attributes> entries = manifest.getEntries();
+            for ( Map.Entry<String, Attributes> entry : entries.entrySet() )
+            {
+                String name = entry.getKey();
+                Attributes attributes = entry.getValue();
+                Attributes filteredAttributes = filterAttributes( instructions, attributes, null );
+                if ( !filteredAttributes.isEmpty() )
+                {
+                    Attributes mergedAttributes = mergedManifest.getAttributes( name );
+                    if ( mergedAttributes != null)
+                    {
+                        mergeAttributes(mergedAttributes, filteredAttributes);
+                    }
+                    else
+                    {
+                        mergedEntries.put(name, filteredAttributes);
+                    }   
+                }
+            }
+        }
+    }
+
+
+    /**
+     * @see Analyzer#filter
+     */
+    private static Attributes filterAttributes(Instructions instructions, Attributes source, Set<Instruction> nomatch) {
+        Attributes result = new Attributes();
+        Map<String, Object> keys = new TreeMap<String, Object>();
+        for ( Object key : source.keySet() )
+        {
+            keys.put( key.toString(), key );
+        }
+
+        List<Instruction> filters = new ArrayList<Instruction>( instructions.keySet() );
+        if (nomatch == null)
+        {
+            nomatch = Create.set();
+        }
+        for ( Instruction instruction : filters ) {
+            boolean match = false;
+            for (Iterator<Map.Entry<String, Object>> i = keys.entrySet().iterator(); i.hasNext();)
+            {
+                Map.Entry<String, Object> entry = i.next();
+                String key = entry.getKey();
+                if ( instruction.matches( key ) )
+                {
+                    match = true;
+                    if (!instruction.isNegated()) {
+                        Object name = entry.getValue();
+                        Object value = source.get( name );
+                        result.put( name, value );
+                    }
+                    i.remove(); // Can never match again for another pattern
+                }
+            }
+            if (!match && !instruction.isAny())
+                nomatch.add(instruction);
+        }
+
+        /*
+         * Tricky. If we have umatched instructions they might indicate that we
+         * want to have multiple decorators for the same package. So we check
+         * the unmatched against the result list. If then then match and have
+         * actually interesting properties then we merge them
+         */
+
+        for (Iterator<Instruction> i = nomatch.iterator(); i.hasNext();) {
+            Instruction instruction = i.next();
+
+            // We assume the user knows what he is
+            // doing and inserted a literal. So
+            // we ignore any not matched literals
+            // #252, we should not be negated to make it a constant
+            if (instruction.isLiteral() && !instruction.isNegated()) {
+                Object key = keys.get( instruction.getLiteral() );
+                if ( key != null )
+                {
+                    Object value = source.get( key );
+                    result.put( key, value );
+                }
+                i.remove();
+                continue;
+            }
+
+            // Not matching a negated instruction looks
+            // like an error ... Though so, but
+            // in the second phase of Export-Package
+            // the !package will never match anymore. 
+            if (instruction.isNegated()) {
+                i.remove();
+                continue;
+            }
+
+            // An optional instruction should not generate
+            // an error
+            if (instruction.isOptional()) {
+                i.remove();
+                continue;
+            }
+        }
+        return result;
+    }
+
+
+    private static void mergeAttributes( Attributes... attributesArray ) throws IOException
+    {
+        for ( int i = attributesArray.length - 2; i >= 0; i-- )
+        {
+            Attributes mergedAttributes = attributesArray[i];
+            Attributes attributes = attributesArray[i + 1];
+            for ( Map.Entry<Object, Object> entry : attributes.entrySet() )
+            {
+                Object name = entry.getKey();
+                String value = (String) entry.getValue();
+                String oldValue = (String) mergedAttributes.put( name, value );
+                if ( oldValue != null )
+                {
+                    Parameters mergedClauses = OSGiHeader.parseHeader( oldValue );
+                    Parameters clauses = OSGiHeader.parseHeader( value );
+                    if ( !mergedClauses.isEqual( clauses) )
+                    {
+                        for ( Map.Entry<String, Attrs> clauseEntry : clauses.entrySet() )
+                        {
+                            String clause = clauseEntry.getKey();
+                            Attrs attrs = clauseEntry.getValue();
+                            Attrs mergedAttrs = mergedClauses.get( clause );
+                            if ( mergedAttrs == null)
+                            {
+                                mergedClauses.put( clause, attrs );
+                            }
+                            else if ( !mergedAttrs.isEqual(attrs) )
+                            {
+                                for ( Map.Entry<String,String> adentry : attrs.entrySet() )
+                                {
+                                    String adname = adentry.getKey();
+                                    String ad = adentry.getValue();
+                                    if ( mergedAttrs.containsKey( adname ) )
+                                    {
+                                        Attrs.Type type = attrs.getType( adname );
+                                        switch (type)
+                                        {
+                                            case VERSIONS:
+                                            case STRINGS:
+                                            case LONGS: 
+                                            case DOUBLES:
+                                                ExtList<String> mergedAd = ExtList.from( mergedAttrs.get( adname ) );
+                                                ExtList.from( ad ).addAll( ExtList.from( ad ) );
+                                                mergedAttrs.put(adname, mergedAd.join() );
+                                                break;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        mergedAttrs.put( adname, ad );
+                                    }
+                                }
+                            }
+                        }
+                        mergedAttributes.put( name, Processor.printClauses( mergedClauses ) );
+                    }
+                }
+            }    
+        }
     }
 
 
